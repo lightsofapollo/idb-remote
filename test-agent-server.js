@@ -6,7 +6,7 @@ var Agent = require('test-agent'),
       path: __dirname,
       testDir: 'test/',
       libDir: 'lib/',
-      testSuffix: '_test.js'
+      testSuffix: '-test.js'
     });
 
 server.use(Apps.Suite, suite);
