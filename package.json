@@ -1,0 +1,30 @@
+{
+  "name": "idb-remote",
+  "version": "0.0.1",
+  "author": "James Lal [:lightsofapollo]",
+  "description": "Remoting interface for indexeddb",
+  "main": "lib/index.js",
+
+  "keywords": [
+    "idb",
+    "indexeddb",
+    "database",
+    "proxy"
+  ],
+  "dependencies" : {
+    "eventemitter2": "~0.4"
+  },
+  "devDependencies": {
+    "mocha": "~1.7",
+    "test-agent": "~0.8",
+    "chai": "~1.6"
+  },
+  "license": "MIT",
+  "engine": {
+    "node": ">=0.4"
+  },
+
+  "scripts": {
+    "test": "make test-node"
+  }
+}
