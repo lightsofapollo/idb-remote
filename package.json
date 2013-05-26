@@ -12,7 +12,8 @@
     "proxy"
   ],
   "dependencies" : {
-    "eventemitter2": "~0.4"
+    "eventemitter2": "~0.4",
+    "ws": "~0.4"
   },
   "devDependencies": {
     "mocha": "~1.7",

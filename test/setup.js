@@ -11,10 +11,6 @@
   // node setup
   if (isNode) {
     setupChai(require('chai'));
-    setupMochaBench(
-      require('mocha-benchmark'),
-      require('benchmark')
-    );
   } else {
     require('/node_modules/eventemitter2/lib/eventemitter2.js');
 
