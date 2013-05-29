@@ -8,48 +8,18 @@ suite('node/proxy-bridge', function() {
   var ProxyBridge = require('../../lib/node/proxy-bridge');
   var dbName = 'db';
 
-  var _id = 0;
-
-  /**
-   * Send a command that requires a response.
-   */
-  function command(client, msg, callback) {
-    var requestId = ++_id;
-    var cmd = JSON.stringify([
-      'request', requestId, msg
-    ]);
-
-    oneMessage(client, 'response ' + requestId, callback);
-    client.send(cmd);
-  }
-
-  /**
-   * Wait for the websocket to receive one message.
-   */
-  function oneMessage(client, type, callback) {
-    if (typeof type === 'function') {
-      callback = type;
-      type = null;
-    }
-
-    client.on('message', function handle(msg) {
-      var data = JSON.parse(msg);
-
-      if (type && data[0] !== type)
-        // type filter is present and does not match skip
-        return;
-
-      // do it in the next tick so it can't throw before removing listener
-      process.nextTick(callback.bind(null, data));
-      client.removeListener('message', handle);
-    });
-  }
-
   function registerProxy() {
     setup(function(done) {
+      var pending = 2;
+      function next() {
+        if (--pending === 0)
+          done();
+      }
       // bind so it does not fail
-      subject.once('register proxy', done.bind(null, null));
-      provider.send(JSON.stringify(registerPayload));
+      subject.once('register proxy', next);
+      client.once('register proxy', next);
+
+      provider.emit.apply(provider, registerPayload);
     });
   }
 
@@ -74,13 +44,16 @@ suite('node/proxy-bridge', function() {
 
   setup(function(done) {
     io = socketio.listen(port);
-    subject = new ProxyBridge(io.sockets);
+    subject = new ProxyBridge(io);
 
-    client = ioClient.connect('ws://localhost:' + port, clientOptions);
-    provider = ioClient.connect('ws://localhost:' + port, clientOptions);
+    client =
+      ioClient.connect('ws://localhost:' + port + '/clients', clientOptions);
 
-    client.socket.on('connect', next);
-    provider.socket.on('connect', next);
+    provider =
+      ioClient.connect('ws://localhost:' + port + '/providers', clientOptions);
+
+    client.on('connect', next);
+    provider.on('connect', next);
 
     var pending = 2;
     function next() {
@@ -98,7 +71,7 @@ suite('node/proxy-bridge', function() {
   });
 
   test('initilization', function() {
-    assert.equal(subject.server, io.sockets);
+    assert.equal(subject.io, io);
   });
 
   suite('provider: [un]register proxy', function() {
@@ -110,8 +83,6 @@ suite('node/proxy-bridge', function() {
           return done();
       }
 
-      provider.send(JSON.stringify(registerPayload));
-
       subject.on('register proxy', function() {
         var details = subject.providers[providerDomain];
         assert.ok(details, 'registers proxy');
@@ -121,15 +92,12 @@ suite('node/proxy-bridge', function() {
         next();
       });
 
-      function gotRegister(client) {
-        oneMessage(client, function(msg) {
-          assert.deepEqual(msg, registerPayload);
-          next();
-        });
-      }
+      client.on('register proxy', function(msg) {
+        assert.deepEqual(msg, registerPayload[1]);
+        next();
+      });
 
-      // broadcast (even to provider)
-      gotRegister(client);
+      provider.emit.apply(provider, registerPayload);
     }
 
     test('registers provider', register);
@@ -151,10 +119,8 @@ suite('node/proxy-bridge', function() {
           next();
         });
 
-        oneMessage(client, function(msg) {
-          assert.equal(msg[0], 'unregister proxy');
-          assert.equal(msg[1], providerDomain);
-
+        client.once('unregister proxy', function(domain) {
+          assert.equal(domain, providerDomain);
           next();
         });
 
@@ -168,7 +134,7 @@ suite('node/proxy-bridge', function() {
 
     var response;
     setup(function(done) {
-      command(client, ['databases'], function(_response) {
+      client.emit('databases', function(_response) {
         response = _response;
         done();
       });
@@ -183,7 +149,7 @@ suite('node/proxy-bridge', function() {
 
       assert.deepEqual(
         expected,
-        response[1]
+        response
       );
     });
   });
@@ -200,7 +166,7 @@ suite('node/proxy-bridge', function() {
     });
   });
 
-  suite('cient reques: objectStores', function() {
+  suite('client requests: objectStores', function() {
     registerProxy();
 
     var response;
@@ -211,22 +177,16 @@ suite('node/proxy-bridge', function() {
       var isDone = false;
 
       // verify provider gets request
-      oneMessage(provider, 'request', function(msg) {
-        // expect msg format: [type, id, content];
-        var content = msg[2];
-        assert.equal(content[0], 'objectStores');
-        assert.equal(content[1], dbName, 'sends db name');
+      provider.on('objectStores', function(db, callback) {
+        if (typeof callback !== 'function')
+          return done(new Error('callback must be provided'));
 
-        // send response to server
-        provider.send(JSON.stringify(
-          ['response ' + _id, ['objectStores', stores]]
-        ));
-
-        // mark request as sent
+        assert.equal(db, dbName, 'sends db name');
+        callback(stores);
         isDone = true;
       });
 
-      command(client, ['objectStores', db], function(_response) {
+      client.emit('objectStores', db, function(_response) {
         response = _response;
         assert.ok(isDone);
         done();
@@ -235,9 +195,96 @@ suite('node/proxy-bridge', function() {
 
     test('proxies response to client', function() {
       assert.deepEqual(
-        response[1],
-        ['objectStores', stores]
+        response,
+        stores
       );
     });
   });
+
+  suite('#createStream', function() {
+    registerProxy();
+
+    var result;
+    setup(function() {
+      result = subject.createStream(client);
+    });
+
+    test('first stream', function() {
+      assert.equal(subject.streams[result], client);
+    });
+
+    test('client disconnects', function(done) {
+      // servers reference to the client
+      var serverSocket =
+        io.sockets.sockets[client.socket.sessionid];
+
+      client.on('disconnect', function() {
+        assert.ok(!subject.streams[result]);
+        done();
+      });
+
+      serverSocket.disconnect();
+    });
+  });
+
+  suite('#proxyStream', function() {
+    registerProxy();
+
+    var id;
+
+    var serverSocket;
+    setup(function() {
+      // must get server socket from specific room for this to work.
+      serverSocket =
+        io.of('/clients').sockets[client.socket.sessionid];
+
+      id = subject.createStream(serverSocket);
+    });
+
+    suite('multiple messages', function() {
+      var messages;
+
+      setup(function(done) {
+        messages = [];
+        var pending = 2;
+        function next() {
+
+          if (--pending === 0)
+            done();
+        }
+
+        client.on('stream', function(id, content) {
+          messages.push([id, content]);
+          next();
+        });
+
+        provider.emit('stream', id, ['data', 1]);
+        provider.emit('stream', id, ['data', 2]);
+      });
+
+      test('stream messages', function() {
+        var expected = [
+          [id, ['data', 1]],
+          [id, ['data', 2]]
+        ];
+
+        assert.deepEqual(
+          messages,
+          expected
+        );
+      });
+    });
+
+    test('on stream end', function(done) {
+      provider.emit('stream', id, ['end']);
+
+      client.on('stream', function() {
+        assert.ok(!subject.streams[id]);
+        done();
+      });
+    });
+
+  });
+
+
 });
