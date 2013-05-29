@@ -8,6 +8,10 @@ suite('node/proxy-bridge', function() {
   var ProxyBridge = require('../../lib/node/proxy-bridge');
   var dbName = 'db';
 
+  function getServerSocket(room, client) {
+    return io.of(room).sockets[client.socket.sessionid];
+  }
+
   function registerProxy() {
     setup(function(done) {
       var pending = 2;
@@ -144,7 +148,7 @@ suite('node/proxy-bridge', function() {
       var dbName =
         registerPayload[1].databases;
 
-      var prefixed = subject.prefixDb(providerDomain, dbName);
+      var prefixed = subject.encodeDb(providerDomain, dbName);
       var expected = [prefixed];
 
       assert.deepEqual(
@@ -166,6 +170,62 @@ suite('node/proxy-bridge', function() {
     });
   });
 
+  suite('#getOwner', function() {
+    var serverSocket;
+    setup(function() {
+      serverSocket = getServerSocket('/clients', client);
+    });
+
+    test('success', function() {
+      var result =
+        subject.getOwner(serverSocket, subject.encodeDb(providerDomain, dbName));
+
+      assert.deepEqual(
+        result,
+        { domain: providerDomain, database: dbName }
+      );
+    });
+
+    test('missing seperator', function(done) {
+      client.on('error', function(msg) {
+        assert.include(msg, 'invalid');
+        done();
+      });
+
+      subject.getOwner(serverSocket, 'foobar');
+    });
+  });
+
+  suite('#getProvider', function() {
+    registerProxy();
+
+    var owner;
+    var serverSocket;
+    setup(function() {
+      serverSocket = getServerSocket('/clients', client);
+      owner = subject.getOwner(
+        serverSocket,
+        subject.encodeDb(providerDomain, dbName)
+      );
+    });
+
+    test('success', function() {
+      assert.equal(
+        subject.getProvider(serverSocket, owner),
+        subject.providers[owner.domain]
+      );
+    });
+
+    test('error', function(done) {
+      client.on('error', function(msg) {
+        assert.include(msg, 'domain');
+        done();
+      });
+
+      subject.getProvider(serverSocket, 'foobar');
+    });
+  });
+
   suite('client requests: objectStores', function() {
     registerProxy();
 
@@ -173,7 +233,7 @@ suite('node/proxy-bridge', function() {
     var stores = ['a', 'b', 'c'];
 
     setup(function(done) {
-      var db = subject.prefixDb(providerDomain, 'db');
+      var db = subject.encodeDb(providerDomain, 'db');
       var isDone = false;
 
       // verify provider gets request
@@ -215,10 +275,9 @@ suite('node/proxy-bridge', function() {
 
     test('client disconnects', function(done) {
       // servers reference to the client
-      var serverSocket =
-        io.sockets.sockets[client.socket.sessionid];
+      var serverSocket = getServerSocket('/clients', client);
 
-      client.on('disconnect', function() {
+      client.once('disconnect', function() {
         assert.ok(!subject.streams[result]);
         done();
       });
@@ -235,9 +294,7 @@ suite('node/proxy-bridge', function() {
     var serverSocket;
     setup(function() {
       // must get server socket from specific room for this to work.
-      serverSocket =
-        io.of('/clients').sockets[client.socket.sessionid];
-
+      serverSocket = getServerSocket('/clients', client);
       id = subject.createStream(serverSocket);
     });
 
@@ -286,5 +343,85 @@ suite('node/proxy-bridge', function() {
 
   });
 
+  suite('client requests: all', function() {
+    registerProxy();
 
+    var allOptions = { foo: true };
+    var store = 'a';
+    var clientDb;
+
+    function request(callback) {
+      client.emit('all', clientDb, store, allOptions);
+
+      provider.once('all', function() {
+        callback.apply(this, arguments);
+      });
+    }
+
+    setup(function() {
+      clientDb = subject.encodeDb(providerDomain, dbName);
+    });
+
+    test('provider setup', function(done) {
+      request(function(id, db, storeName, options) {
+        assert.ok(id, 'stream id');
+        assert.ok(subject.streams[id], 'server stream id');
+        assert.equal(db, dbName, 'db name');
+        assert.equal(storeName, store, 'store');
+
+        assert.deepEqual(options, allOptions, 'options');
+
+        done();
+      });
+    });
+
+    suite('successful stream', function() {
+      var messages;
+      var id;
+
+      setup(function(done) {
+        messages = [];
+
+        client.on('stream', function stream(_id, content) {
+          if (_id !== id)
+            return done(new Error('stream id mismatch'));
+
+          messages.push(content);
+
+          if (content[0] === 'end') {
+            client.removeListener('stream', stream);
+            done();
+          }
+        });
+
+        // stage provider
+        request(function(_id) {
+          id = _id;
+
+          // send provider data
+          provider.emit('stream', id, ['data', 1]);
+          provider.emit('stream', id, ['data', 2]);
+          provider.emit('stream', id, ['end']);
+        });
+      });
+
+      test('closes stream', function() {
+        assert.ok(!subject.streams[id]);
+      });
+
+      test('sends all data to client', function() {
+        var expected = [
+          ['data', 1],
+          ['data', 2],
+          ['end']
+        ];
+
+        assert.deepEqual(
+          messages,
+          expected
+        );
+      });
+
+    });
+  });
 });
