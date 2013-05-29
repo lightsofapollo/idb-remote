@@ -2,7 +2,8 @@ suite('node/proxy-bridge', function() {
   if (typeof window !== 'undefined')
     return test('node only test', function() {});
 
-  var ws = require('ws');
+  var socketio = require('socket.io');
+  var ioClient = require('socket.io-client');
   var port = 60123;
   var ProxyBridge = require('../../lib/node/proxy-bridge');
   var dbName = 'db';
@@ -52,7 +53,6 @@ suite('node/proxy-bridge', function() {
     });
   }
 
-  var server;
   var client;
   var provider;
 
@@ -66,49 +66,45 @@ suite('node/proxy-bridge', function() {
   ];
 
   var subject;
+  var io;
+  var clientOptions = {
+    transports: ['websocket'],
+    'force new connection': true
+  };
+
   setup(function(done) {
-    server = new ws.Server({ port: port }, function() {
-     subject = new ProxyBridge(server);
-     done();
-    });
-  });
+    io = socketio.listen(port);
+    subject = new ProxyBridge(io.sockets);
 
-  // setup client ( who wishes information from the provider )
-  setup(function(done) {
-    client = new ws('ws://localhost:' + port, {
-      origin: 'http://client.localhost'
-    });
+    client = ioClient.connect('ws://localhost:' + port, clientOptions);
+    provider = ioClient.connect('ws://localhost:' + port, clientOptions);
 
-    // wait for open so sockets can close cleanly
-    client.on('open', done);
-  });
+    client.socket.on('connect', next);
+    provider.socket.on('connect', next);
 
-  // and the provider (which will respond to client requests )
-  setup(function(done) {
-    provider = new ws('ws://localhost:' + port, {
-      origin: 'http://provider.localhost'
-    });
-
-    provider.on('open', done);
+    var pending = 2;
+    function next() {
+      if (--pending === 0) {
+        done();
+      }
+    }
   });
 
   teardown(function() {
-    // immediately close client (to prevent network errors)
-    client.terminate();
-    provider.terminate();
+    client.socket.disconnect();
+    provider.socket.disconnect();
 
-    // close server
-    server.close();
+    io.server.close();
   });
 
   test('initilization', function() {
-    assert.equal(subject.server, server);
+    assert.equal(subject.server, io.sockets);
   });
 
   suite('provider: [un]register proxy', function() {
     // as a standalone function so it can be both a test and setup.
     function register(done) {
-      var pending = 3;
+      var pending = 2;
       function next() {
         if (--pending === 0)
           return done();
@@ -133,7 +129,7 @@ suite('node/proxy-bridge', function() {
       }
 
       // broadcast (even to provider)
-      [client, provider].forEach(gotRegister);
+      gotRegister(client);
     }
 
     test('registers provider', register);
@@ -162,7 +158,7 @@ suite('node/proxy-bridge', function() {
           next();
         });
 
-        provider.terminate();
+        provider.socket.disconnect();
       });
     });
   });

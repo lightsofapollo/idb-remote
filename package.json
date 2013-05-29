@@ -13,7 +13,8 @@
   ],
   "dependencies" : {
     "eventemitter2": "~0.4",
-    "ws": "~0.4"
+    "socket.io": "~0.9",
+    "socket.io-client": "~0.9"
   },
   "devDependencies": {
     "mocha": "~1.7",
