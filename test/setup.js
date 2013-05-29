@@ -18,6 +18,7 @@
     require('/lib/index.js');
     require('/lib/client.js');
     require('/lib/client/direct.js');
+    require('/lib/client/socketio.js');
     require('/node_modules/chai/chai.js', function() {
       setupChai(window.chai);
     });

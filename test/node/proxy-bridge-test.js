@@ -332,15 +332,19 @@ suite('node/proxy-bridge', function() {
       });
     });
 
-    test('on stream end', function(done) {
-      provider.emit('stream', id, ['end']);
+    function closesStream(type) {
+      test('on stream event: ' + type, function(done) {
+        provider.emit('stream', id, [type]);
 
-      client.on('stream', function() {
-        assert.ok(!subject.streams[id]);
-        done();
+        client.on('stream', function() {
+          assert.ok(!subject.streams[id]);
+          done();
+        });
       });
-    });
+    }
 
+    closesStream('end');
+    closesStream('error');
   });
 
   suite('client requests: all', function() {
@@ -349,12 +353,24 @@ suite('node/proxy-bridge', function() {
     var allOptions = { foo: true };
     var store = 'a';
     var clientDb;
+    var clientId;
 
     function request(callback) {
-      client.emit('all', clientDb, store, allOptions);
+      var args;
+      var pending = 2;
+      function next() {
+        if (--pending === 0)
+          callback.apply(this, args);
+      }
+
+      client.emit('all', clientDb, store, allOptions, function(_clientId) {
+        clientId = _clientId;
+        next();
+      });
 
       provider.once('all', function() {
-        callback.apply(this, arguments);
+        args = Array.prototype.slice.call(arguments);
+        next();
       });
     }
 
@@ -403,6 +419,10 @@ suite('node/proxy-bridge', function() {
           provider.emit('stream', id, ['data', 2]);
           provider.emit('stream', id, ['end']);
         });
+      });
+
+      test('client should get id', function() {
+        assert.equal(id, clientId);
       });
 
       test('closes stream', function() {
