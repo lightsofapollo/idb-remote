@@ -81,7 +81,7 @@ suite('node/proxy-bridge', function() {
   suite('provider: [un]register proxy', function() {
     // as a standalone function so it can be both a test and setup.
     function register(done) {
-      var pending = 2;
+      var pending = 3;
       function next() {
         if (--pending === 0)
           return done();
@@ -101,7 +101,10 @@ suite('node/proxy-bridge', function() {
         next();
       });
 
-      provider.emit.apply(provider, registerPayload);
+      provider.emit(registerPayload[0], registerPayload[1], function() {
+        // verify callback functionality
+        next();
+      });
     }
 
     test('registers provider', register);
