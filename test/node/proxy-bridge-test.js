@@ -141,7 +141,7 @@ suite('node/proxy-bridge', function() {
 
     var response;
     setup(function(done) {
-      client.emit('databases', function(_response) {
+      client.emit('databases', function(err, _response) {
         response = _response;
         done();
       });
@@ -249,7 +249,7 @@ suite('node/proxy-bridge', function() {
         isDone = true;
       });
 
-      client.emit('objectStores', db, function(_response) {
+      client.emit('objectStores', db, function(err, _response) {
         response = _response;
         assert.ok(isDone);
         done();
